@@ -1,0 +1,19 @@
+.git
+.gitignore
+
+.idea/
+
+.DS_Store
+
+*.out
+
+README.md
+
+Makefile
+.golangci.yaml
+easyp.*
+.mockery.yaml.dsf
+
+# Go test files and mocks
+**/*_test.go
+**/mocks/
