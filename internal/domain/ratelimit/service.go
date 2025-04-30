@@ -14,6 +14,8 @@ type RateLimiterService interface {
 	RemoveClient(clientID string) error
 	GetClient(clientID string) (*Client, error)
 	CleanupExpired(maxAge time.Duration)
+	StartRefillTicker(interval time.Duration)
+	StopRefillTicker()
 }
 
 type InMemoryRateLimiter struct {
@@ -21,6 +23,9 @@ type InMemoryRateLimiter struct {
 	mu                sync.RWMutex
 	defaultCapacity   int
 	defaultRatePerSec float64
+	ticker            *time.Ticker
+	stopTickerCh      chan struct{}
+	tickerWg          sync.WaitGroup
 }
 
 func NewInMemoryRateLimiter(defaultCapacity int, defaultRatePerSec float64) *InMemoryRateLimiter {
@@ -28,6 +33,65 @@ func NewInMemoryRateLimiter(defaultCapacity int, defaultRatePerSec float64) *InM
 		clients:           make(map[string]*Client),
 		defaultCapacity:   defaultCapacity,
 		defaultRatePerSec: defaultRatePerSec,
+		stopTickerCh:      make(chan struct{}),
+	}
+}
+
+func (r *InMemoryRateLimiter) StartRefillTicker(interval time.Duration) {
+	if r.ticker != nil {
+		slog.Warn("тикер пополнения токенов уже запущен")
+		return
+	}
+
+	r.ticker = time.NewTicker(interval)
+	r.tickerWg.Add(1)
+
+	go func() {
+		defer r.tickerWg.Done()
+		slog.Info("запуск тикера пополнения токенов", "interval", interval)
+
+		for {
+			select {
+			case <-r.ticker.C:
+				r.refillAll()
+			case <-r.stopTickerCh:
+				slog.Info("остановка тикера пополнения токенов")
+				r.ticker.Stop()
+
+				return
+			}
+		}
+	}()
+}
+
+func (r *InMemoryRateLimiter) StopRefillTicker() {
+	if r.ticker == nil {
+		slog.Warn("тикер пополнения токенов не был запущен")
+		return
+	}
+
+	close(r.stopTickerCh)
+	r.tickerWg.Wait()
+	r.ticker = nil
+
+	slog.Info("тикер пополнения токенов остановлен")
+}
+
+func (r *InMemoryRateLimiter) refillAll() {
+	r.mu.RLock()
+
+	clientsToRefill := make([]*Client, 0, len(r.clients))
+	for _, client := range r.clients {
+		clientsToRefill = append(clientsToRefill, client)
+	}
+	r.mu.RUnlock()
+
+	if len(clientsToRefill) == 0 {
+		return
+	}
+
+	for _, client := range clientsToRefill {
+		client.Bucket.RefillNow()
 	}
 }
 

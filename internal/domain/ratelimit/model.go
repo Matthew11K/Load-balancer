@@ -23,20 +23,18 @@ func NewTokenBucket(capacity int, ratePerSec float64) *TokenBucket {
 	return tb
 }
 
-func (tb *TokenBucket) refill() {
+func (tb *TokenBucket) RefillNow() {
 	now := time.Now()
 	nowNano := now.UnixNano()
 	lastRefillNano := atomic.LoadInt64(&tb.lastRefillTime)
 	lastRefill := time.Unix(0, lastRefillNano)
 
 	elapsed := now.Sub(lastRefill).Seconds()
-
 	if elapsed <= 0 {
 		return
 	}
 
 	newTokens := int64(elapsed * tb.ratePerSec)
-
 	if newTokens <= 0 {
 		return
 	}
@@ -45,19 +43,25 @@ func (tb *TokenBucket) refill() {
 		return
 	}
 
-	currentTokens := tb.tokens.Load()
+	for {
+		currentTokens := tb.tokens.Load()
 
-	newTokensTotal := currentTokens + newTokens
-	if newTokensTotal > tb.capacity {
-		newTokensTotal = tb.capacity
+		newTokensTotal := currentTokens + newTokens
+		if newTokensTotal > tb.capacity {
+			newTokensTotal = tb.capacity
+		}
+
+		if newTokensTotal == currentTokens {
+			break
+		}
+
+		if tb.tokens.CompareAndSwap(currentTokens, newTokensTotal) {
+			break
+		}
 	}
-
-	tb.tokens.Store(newTokensTotal)
 }
 
 func (tb *TokenBucket) AllowRequest() bool {
-	tb.refill()
-
 	for {
 		current := tb.tokens.Load()
 		if current < 1 {

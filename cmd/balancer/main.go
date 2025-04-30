@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"balancer/internal/config"
@@ -32,10 +34,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	var (
+		rateLimiter ratelimit.RateLimiterService
+		repository  ratelimit.Repository
+	)
+
 	var serverOptions []server.Option
 
 	if cfg.RateLimiting.Enabled {
-		rateLimiter, repository, err := setupRateLimiter(cfg)
+		var err error
+
+		rateLimiter, repository, err = setupRateLimiter(cfg)
 		if err != nil {
 			slog.Error("ошибка при создании сервиса ограничения скорости", "error", err)
 			os.Exit(1)
@@ -45,16 +54,44 @@ func main() {
 			serverOptions = append(serverOptions, server.WithRepository(repository))
 		}
 
-		serverOptions = append(serverOptions,
-			server.WithRateLimiter(rateLimiter, cfg.RateLimiting.Enabled))
+		serverOptions = append(serverOptions, server.WithRateLimiter(rateLimiter, cfg.RateLimiting.Enabled))
+
+		if rlTicker, ok := rateLimiter.(interface {
+			StartRefillTicker(interval time.Duration)
+		}); ok {
+			rlTicker.StartRefillTicker(1 * time.Second)
+		}
 	}
 
 	srv := server.NewServer(cfg, loadBalancer, serverOptions...)
 
-	if err := server.StartWithGracefulShutdown(srv); err != nil {
-		slog.Error("ошибка при работе сервера", "error", err)
+	go func() {
+		if err := srv.Start(); err != nil {
+			slog.Error("ошибка при старте сервера", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	slog.Info("получен сигнал завершения, начинаем остановку...")
+
+	if rateLimiter != nil {
+		if rlTickerStopper, ok := rateLimiter.(interface {
+			StopRefillTicker()
+		}); ok {
+			slog.Info("остановка тикера rate limiter...")
+			rlTickerStopper.StopRefillTicker()
+		}
+	}
+
+	if err := srv.GracefulShutdown(); err != nil {
+		slog.Error("ошибка при корректной остановке сервера", "error", err)
 		os.Exit(1)
 	}
+
+	slog.Info("сервер успешно остановлен")
 }
 
 func setupLogger(cfg *config.Config) {

@@ -31,6 +31,8 @@ func TestTokenBucket_Refill(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
+	bucket.RefillNow()
+
 	for i := 0; i < 2; i++ {
 		allowed := bucket.AllowRequest()
 		assert.True(t, allowed, "Запрос %d после ожидания должен быть разрешен", i+1)
@@ -54,6 +56,8 @@ func TestClient_AllowRequest(t *testing.T) {
 	prevAccess := client.GetLastAccessTime()
 
 	time.Sleep(1 * time.Second)
+
+	client.Bucket.RefillNow()
 
 	allowed = client.AllowRequest()
 	assert.True(t, allowed, "Запрос после ожидания должен быть разрешен")

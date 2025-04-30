@@ -11,12 +11,12 @@ func NewBalancerFactory(healthChecker HealthChecker) *Factory {
 }
 
 func (f *Factory) CreateBalancer(algorithm string) (Balancer, error) {
-	switch algorithm {
-	case "round-robin":
+	switch AlgorithmType(algorithm) {
+	case RoundRobin:
 		return NewRoundRobinBalancer(f.healthChecker), nil
-	case "random":
+	case Random:
 		return NewRandomBalancer(f.healthChecker), nil
-	case "least-connections":
+	case LeastConnections:
 		return NewLeastConnectionsBalancer(f.healthChecker), nil
 	default:
 		return NewRoundRobinBalancer(f.healthChecker), nil

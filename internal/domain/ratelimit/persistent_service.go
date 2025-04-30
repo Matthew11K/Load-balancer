@@ -14,6 +14,9 @@ type PersistentRateLimiter struct {
 	defaultCapacity   int
 	defaultRatePerSec float64
 	repository        Repository
+	ticker            *time.Ticker
+	stopTickerCh      chan struct{}
+	tickerWg          sync.WaitGroup
 }
 
 func NewPersistentRateLimiter(defaultCapacity int, defaultRatePerSec float64, repository Repository) (*PersistentRateLimiter, error) {
@@ -22,6 +25,7 @@ func NewPersistentRateLimiter(defaultCapacity int, defaultRatePerSec float64, re
 		defaultCapacity:   defaultCapacity,
 		defaultRatePerSec: defaultRatePerSec,
 		repository:        repository,
+		stopTickerCh:      make(chan struct{}),
 	}
 
 	clients, err := repository.ListClients()
@@ -173,5 +177,63 @@ func (r *PersistentRateLimiter) CleanupExpired(maxAge time.Duration) {
 
 	if len(expiredClients) > 0 {
 		slog.Info("выполнена очистка неактивных клиентов", "удалено", len(expiredClients))
+	}
+}
+
+func (r *PersistentRateLimiter) StartRefillTicker(interval time.Duration) {
+	if r.ticker != nil {
+		slog.Warn("тикер пополнения токенов (persistent) уже запущен")
+		return
+	}
+
+	r.ticker = time.NewTicker(interval)
+	r.tickerWg.Add(1)
+
+	go func() {
+		defer r.tickerWg.Done()
+		slog.Info("запуск тикера пополнения токенов (persistent)", "interval", interval)
+
+		for {
+			select {
+			case <-r.ticker.C:
+				r.refillAll()
+			case <-r.stopTickerCh:
+				slog.Info("остановка тикера пополнения токенов (persistent)")
+				r.ticker.Stop()
+
+				return
+			}
+		}
+	}()
+}
+
+func (r *PersistentRateLimiter) StopRefillTicker() {
+	if r.ticker == nil {
+		slog.Warn("тикер пополнения токенов (persistent) не был запущен")
+		return
+	}
+
+	close(r.stopTickerCh)
+	r.tickerWg.Wait()
+	r.ticker = nil
+
+	slog.Info("тикер пополнения токенов (persistent) остановлен")
+}
+
+func (r *PersistentRateLimiter) refillAll() {
+	r.mu.RLock()
+
+	clientsToRefill := make([]*Client, 0, len(r.clients))
+	for _, client := range r.clients {
+		clientsToRefill = append(clientsToRefill, client)
+	}
+	r.mu.RUnlock()
+
+	if len(clientsToRefill) == 0 {
+		return
+	}
+
+	for _, client := range clientsToRefill {
+		client.Bucket.RefillNow()
 	}
 }
