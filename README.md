@@ -99,3 +99,54 @@ logging:
   level: "info"  # debug, info, warn, error
   format: "json"  # json или text
 ```
+
+## API для управления ограничениями скорости
+
+### Добавление/обновление клиента
+```
+POST /api/clients
+Content-Type: application/json
+
+{
+  "client_id": "user123",
+  "capacity": 100,
+  "rate_per_sec": 10
+}
+```
+
+### Получение информации о клиенте
+```
+GET /api/clients/user123
+```
+
+### Удаление клиента
+```
+DELETE /api/clients/user123
+```
+
+## Тестирование
+
+### Запуск модульных тестов
+```
+make test
+```
+
+### Запуск интеграционных тестов и бенчмарков
+```
+make bench
+```
+
+Для выполнения интеграционных тестов с проверкой на race conditions используется команда:
+```
+go test -bench=. -race ./test/...
+```
+
+### Нагрузочное тестирование с помощью Apache Bench
+```
+make load-test
+```
+
+Для нагрузочного тестирования используется Apache Bench (ab). Команда выполняет 5000 запросов с 100 одновременными подключениями:
+```
+ab -n 5000 -c 100 http://localhost:8080/
+```

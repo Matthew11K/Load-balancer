@@ -227,6 +227,122 @@ func TestLoadBalancerIntegration(t *testing.T) {
 	})
 }
 
+func BenchmarkLoadBalancer(b *testing.B) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:              balancerPort,
+			ReadTimeout:       5 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			ReadHeaderTimeout: 3 * time.Second,
+		},
+		LoadBalancing: config.LoadBalancingConfig{
+			Algorithm:           "round-robin",
+			HealthCheckInterval: 2 * time.Second,
+			HealthCheckTimeout:  1 * time.Second,
+		},
+		RateLimiting: config.RateLimitingConfig{
+			DefaultCapacity:      5000,
+			DefaultRatePerSecond: 1000,
+			Enabled:              true,
+			StorageType:          "memory",
+		},
+		Logging: config.LoggingConfig{
+			Level:  "error",
+			Format: "text",
+		},
+	}
+
+	backends := []struct {
+		URL  string
+		Port int
+	}{
+		{"http://localhost:9001", 9001},
+		{"http://localhost:9002", 9002},
+		{"http://localhost:9003", 9003},
+	}
+
+	for i, be := range backends {
+		backendID := i + 1
+		go startTestBackend(nil, be.Port, backendID)
+
+		cfg.Backends = append(cfg.Backends, config.BackendConfig{
+			URL:    be.URL,
+			Weight: 1,
+		})
+	}
+
+	time.Sleep(1 * time.Second)
+
+	healthChecker := balancer.NewHTTPHealthChecker()
+	balancerFactory := balancer.NewBalancerFactory(healthChecker)
+
+	lb, err := balancerFactory.CreateBalancer(cfg.LoadBalancing.Algorithm)
+	if err != nil {
+		b.Fatalf("Ошибка при создании балансировщика: %v", err)
+	}
+
+	for _, backendCfg := range cfg.Backends {
+		backend, err := balancer.NewBackend(backendCfg.URL, backendCfg.Weight)
+		if err != nil {
+			b.Fatalf("Ошибка при создании бэкенда: %v", err)
+		}
+
+		lb.AddBackend(backend)
+	}
+
+	rateLimiter := ratelimit.NewInMemoryRateLimiter(
+		cfg.RateLimiting.DefaultCapacity,
+		cfg.RateLimiting.DefaultRatePerSecond,
+	)
+
+	srv := server.NewServer(
+		cfg,
+		lb,
+		server.WithRateLimiter(rateLimiter, cfg.RateLimiting.Enabled),
+	)
+
+	err = srv.Start()
+	if err != nil {
+		b.Fatalf("Ошибка при запуске сервера: %v", err)
+	}
+
+	defer func() {
+		err := srv.GracefulShutdown()
+		if err != nil {
+			b.Logf("Ошибка при остановке сервера: %v", err)
+		}
+	}()
+
+	time.Sleep(1 * time.Second)
+
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			resp, err := client.Get(fmt.Sprintf("http://localhost:%d/", balancerPort))
+			if err != nil {
+				b.Logf("Ошибка при выполнении запроса: %v", err)
+				continue
+			}
+
+			_, err = io.ReadAll(resp.Body)
+			if err != nil {
+				b.Logf("Ошибка при чтении ответа: %v", err)
+			}
+
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				b.Logf("Неверный код ответа: %d", resp.StatusCode)
+			}
+		}
+	})
+}
+
 func startTestBackend(t *testing.T, port, id int) {
 	mux := http.NewServeMux()
 
@@ -236,7 +352,7 @@ func startTestBackend(t *testing.T, port, id int) {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		_, err := w.Write([]byte("OK"))
-		if err != nil {
+		if err != nil && t != nil {
 			t.Logf("Ошибка при отправке ответа health check: %v", err)
 		}
 	})
@@ -249,16 +365,20 @@ func startTestBackend(t *testing.T, port, id int) {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			t.Logf("Ошибка запуска тестового бэкенда %d: %v", id, err)
+			if t != nil {
+				t.Logf("Ошибка запуска тестового бэкенда %d: %v", id, err)
+			}
 		}
 	}()
 
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	if t != nil {
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-		if err := server.Shutdown(ctx); err != nil {
-			t.Logf("Ошибка при остановке тестового бэкенда %d: %v", id, err)
-		}
-	})
+			if err := server.Shutdown(ctx); err != nil {
+				t.Logf("Ошибка при остановке тестового бэкенда %d: %v", id, err)
+			}
+		})
+	}
 }
