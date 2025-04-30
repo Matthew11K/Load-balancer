@@ -1,7 +1,8 @@
 COVERAGE_FILE ?= coverage.out
 
 .PHONY: build
-build: build_bot build_scrapper
+build:
+	@go build -o ./bin/balancer ./cmd/balancer
 
 ## test: run all tests
 .PHONY: test
@@ -10,7 +11,7 @@ test:
 	@go tool cover -func='$(COVERAGE_FILE)' | grep ^total | tr -s '\t'
 
 .PHONY: lint
-lint-golang:
+lint:
 	@if ! command -v 'golangci-lint' &> /dev/null; then \
   		echo "Please install golangci-lint!"; exit 1; \
   	fi;
@@ -18,4 +19,21 @@ lint-golang:
 
 .PHONY: clean
 clean:
-	@rm -rf./bin
+	@rm -rf ./bin
+
+.PHONY: run-local
+run-local: build
+	@./bin/balancer -config=./config.local.yaml
+
+.PHONY: run-local-background
+run-local-background: build
+	@./bin/balancer -config=./config.local.yaml &
+
+.PHONY: run-docker
+run-docker:
+	@docker compose down
+	@docker compose up --build
+
+.PHONY: stop-docker
+stop-docker:
+	@docker compose down

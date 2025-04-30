@@ -1,0 +1,36 @@
+server:
+  port: 8090
+  readTimeout: 5s
+  writeTimeout: 10s
+  readHeaderTimeout: 5s
+  
+backends:
+  - url: "http://localhost:8081"
+    weight: 1
+  - url: "http://localhost:8082"
+    weight: 1
+  - url: "http://localhost:8083"
+    weight: 1
+    
+loadbalancing:
+  algorithm: "round-robin"  # Доступные алгоритмы: round-robin, least-connections, random
+  healthCheckInterval: 10s
+  healthCheckTimeout: 2s
+  
+rateLimiting:
+  defaultCapacity: 100 
+  defaultRatePerSecond: 10
+  enabled: true
+  storageType: "memory"  # Тип хранилища: postgres или memory
+  
+database:
+  host: "localhost"
+  port: 5433
+  user: "postgres"
+  password: "postgres" 
+  dbname: "balancer"
+  sslmode: "disable"
+  
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "text"  # json или text 

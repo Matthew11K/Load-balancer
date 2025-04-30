@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS clients (
+    id VARCHAR(255) PRIMARY KEY,
+    capacity INTEGER NOT NULL,
+    rate_per_sec FLOAT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+); 
